@@ -12,7 +12,9 @@ import java.util.ArrayList;
 public class RawApiData implements DocxDto{
     
     // 方法/接口基础信息
+    private String commonInterface  ;           // 接口标题
     private String fullPath;         // 功能方法全路径，唯一标识
+    private String headingPath ;         // 对应标题章节
     private String methodName;       // 方法名，如 getApprovalStatusAndInspection
     private String description;      // 接口描述
     
@@ -20,7 +22,7 @@ public class RawApiData implements DocxDto{
     private List<RawField> inputParams = new ArrayList<>(); 
     
     // 返回信息（对应文档中的“返回字段”表格，通常只有一个顶级字段）
-    private RawField returnField;     
+    private List<RawField> returnField;
     
     // 独立定义的数据结构列表（对应文档中的 表114 BpmTaskProcessVO详细字段 等）
     private List<RawStructure> nestedStructures = new ArrayList<>(); 

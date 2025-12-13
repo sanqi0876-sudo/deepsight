@@ -1,14 +1,26 @@
 package com.yidiansishiyi.deepsight.ingestion.doc.service.impl;
 
-
+import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.io.resource.ResourceUtil;
+import cn.hutool.json.JSONUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yidiansishiyi.deepsight.exception.ErrorCode;
+import com.yidiansishiyi.deepsight.exception.ThrowUtils;
 import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.DocxDto;
 import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawApiData;
+import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawApiData.RawField;
+import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawApiData.RawStructure;
+import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawDocxContentDto;
 import com.yidiansishiyi.deepsight.ingestion.doc.service.DocxParser;
-import org.apache.poi.xwpf.usermodel.IBodyElement;
-import org.apache.poi.xwpf.usermodel.XWPFDocument;
-import org.apache.poi.xwpf.usermodel.XWPFParagraph;
-import org.apache.poi.xwpf.usermodel.XWPFTable;
-import org.springframework.stereotype.Component;
+import com.yidiansishiyi.deepsight.utils.DocxOutlineExtractor;
+import com.yidiansishiyi.deepsight.utils.HeadingItem;
+import com.yidiansishiyi.deepsight.utils.WordDirectoryExtractor;
+import jakarta.annotation.PostConstruct;
+import org.apache.poi.xwpf.usermodel.*;
+import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -20,157 +32,178 @@ import java.util.regex.Pattern;
 
 /**
  * [具体策略] 专门用于解析 CIIS 接口文档的实现类。
- * 核心逻辑：基于文档特征（如 "功能方法,"）和上下文（如 表114 BpmTaskProcessVO详细字段）识别数据。
+ * 核心逻辑：基于文档特征（如 "功能方法,"）和上下文识别数据。
  */
-@Component("ciisDocxParser")
+@Service
 public class CiisDocxParserImpl implements DocxParser {
 
+    // 优化后的正则：匹配独立结构标题。例如 "表104 查询地区返回contents字段" 或 "表\d+ BpmTaskProcessVO详细字段"
+    private static final Pattern STRUCTURE_TABLE_TITLE_PATTERN =
+            Pattern.compile("表\\d+\\s+(查询)?(.+?)(返回contents字段|详细字段)");
 
-    // 正则表达式用于从表格标题中提取 DataStructure 名称，如从 "表114 BpmTaskProcessVO详细字段" 提取 BpmTaskProcessVO
-    private static final Pattern STRUCTURE_NAME_PATTERN =
-            Pattern.compile("表\\d+\\s+(\\w+VO|\\w+DTO)\\s*详细字段");
+    // 独立结构（如 地区，行业，评级）的名称列表，用于辅助识别段落标题
+    private static final List<String> GLOBAL_STRUCTURE_NAMES = List.of("地区", "行业", "评级", "自定义字段设置");
+
+    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    @PostConstruct
+    void setUp() {
+        // 用于测试时加载文件
+        String testFileName = "ciis/doc/4.第四章-交易对手信息.docx";
+        InputStream testFileStream = ResourceUtil.getStream(testFileName);
+//        List<RawDocxContentDto> rawDocxContentDtos = WordDirectoryExtractor.extractDirectoryStructure(testFileName);
+        List<DocxDto> parse = parse(testFileStream);
+        System.out.println();
+        System.out.println();
+        System.out.println();
+        System.out.println();
+        String jsonStr = JSONUtil.toJsonStr(parse);
+        System.out.println(jsonStr);
+    }
 
     @Override
     public boolean supports(String fileName) {
         // 示例：判断文件名前缀是否符合 CIIS 命名规范
-        return fileName.contains("第五章") || fileName.contains("ciis");
+        return fileName.contains("第四章") || fileName.contains("ciis");
     }
 
     @Override
     public List<DocxDto> parse(InputStream inputStream) {
-        List<RawApiData> extractedData = new ArrayList<>();
+        List<RawDocxContentDto> rawDocxContentDtos = WordDirectoryExtractor.extractDirectoryStructure(inputStream);
+        ThrowUtils.throwIf(CollUtil.isEmpty(rawDocxContentDtos), ErrorCode.DATA_PARSING_ERROR, "文档目录结构为空");
 
-        // **状态机变量**
-        RawApiData currentMethodData = null;
-        // 存储文档中所有独立定义的复杂结构，用于在 Method 解析时进行引用
-        Map<String, RawApiData.RawStructure> globalStructuresMap = new HashMap<>();
+        List<DocxDto> docxDtos = new ArrayList<>();
+        RawApiData rawApiData = new RawApiData();
+        for (RawDocxContentDto rawDocxContentDto : rawDocxContentDtos) {
+            String style = rawDocxContentDto.getStyle();
+            if (DocxDto.DOCX_TYPE_TXT.equals(style)) {
+                StringBuilder description = new StringBuilder(rawApiData.getDescription() == null ? "" : rawApiData.getDescription());
+                description.append(rawDocxContentDto.getContent()).append("\n");
+                rawApiData.setDescription(description.toString());
+            } else if (DocxDto.DOCX_TYPE_TABLE.equals(style)) {
+                String content = rawDocxContentDto.getContent();
 
-        try (XWPFDocument document = new XWPFDocument(inputStream)) {
+                try {
+                    List<JsonNode> parsedContent = objectMapper.readValue(
+                            content,
+                            new TypeReference<List<JsonNode>>() {
+                            }
+                    );
+                    if (CollUtil.isEmpty(parsedContent)) {
+                        continue;
+                    }
+                    if (containsAnyKeyword(rawApiData.getHeadingPath(), DocxDto.INTER_FLAG)) {
+                        if (parsedContent.size() == 3) {
+                            JsonNode jsonNode0 = parsedContent.get(0);
+                            rawApiData.setCommonInterface(jsonNode0.asText());
 
-            // 核心遍历文档内容
-            for (IBodyElement element : document.getBodyElements()) {
+                            JsonNode jsonNode1 = parsedContent.get(1);
+                            rawApiData.setMethodName(jsonNode1.asText());
 
-                if (element instanceof XWPFParagraph) {
-                    // 处理段落，尝试识别新的方法或独立结构标题
-                    currentMethodData = handleParagraph((XWPFParagraph) element, extractedData, globalStructuresMap);
-                }
+                            JsonNode jsonNode2 = parsedContent.get(2);
+                            rawApiData.setMethodName(jsonNode2.asText());
 
-                else if (element instanceof XWPFTable) {
-                    XWPFTable table = (XWPFTable) element;
-
-                    // 1. 如果当前正在解析某个方法，尝试解析其请求/返回表格
-                    if (currentMethodData != null) {
-                        handleMethodTable(table, currentMethodData);
-                        // 注意：为了不重复解析，成功解析 Method 表格后，可能需要将 currentMethodData 置空，等待下一个方法标题出现
+                        }
+                        List<RawField> rawFields = mapINTERJsonToRawFields(parsedContent);
+                        rawApiData.setInputParams(rawFields);
+                    }
+                    if (containsAnyKeyword(rawApiData.getHeadingPath(), DocxDto.REQUEST_FLAG)) {
+                        List<RawField> rawFields = mapJsonToRawFields(parsedContent);
+                        rawApiData.setInputParams(rawFields);
+                    }
+                    if (containsAnyKeyword(rawApiData.getHeadingPath(), DocxDto.RESPONSE_FLAG)) {
+                        List<RawField> rawFields = mapJsonToRawFields(parsedContent);
+                        RawStructure rawStructure = new RawStructure();
+                        rawStructure.setFields(rawFields);
+                        rawApiData.setReturnField(rawFields);
                     }
 
-                    // 2. 尝试解析独立的数据结构表格（如 BpmTaskProcessVO 详细字段）
-                    else {
-                        // TODO: 在这里实现查找上一个段落的标题，然后调用 parseGlobalStructureTable
-                    }
+                    // 两种，一种调用接口信息的，另一种是入参出参的，可以接多个表单信息嵌套。
+                    System.out.println(parsedContent);
+                } catch (JsonProcessingException e) {
+                    throw new RuntimeException(e);
                 }
+
+                System.out.println();
+            } else {
+                rawApiData = new RawApiData();
+                rawApiData.setHeadingPath(rawDocxContentDto.getStyle() + "#" + rawDocxContentDto.getContent());
+                docxDtos.add(rawApiData);
+            }
+        }
+
+
+        return docxDtos;
+    }
+
+    private List<RawField> mapINTERJsonToRawFields(List<JsonNode> parsedContent) {
+        return null;
+    }
+
+    public static boolean containsAnyKeyword(String text, List<String> keywords) {
+        return text != null && keywords.stream().anyMatch(text::contains);
+    }
+
+    public List<RawField> mapJsonToRawFields(List<JsonNode> parsedContent) {
+        List<RawField> rawFields = new ArrayList<>();
+
+        for (JsonNode node : parsedContent) {
+            try {
+                RawField rawField = new RawField();
+
+                JsonNode dbType = node.get("数据库类型");
+                rawField.setDbType(dbType == null ? "" : dbType.asText());
+                JsonNode name = node.get("字段");
+                rawField.setName(name == null ? "" : name.asText());
+                JsonNode javaType = node.get("Java类型");
+                rawField.setJavaType(javaType == null ? "" : javaType.asText());
+                JsonNode cnName = node.get("名称");
+                rawField.setCnName(cnName == null ? "" : cnName.asText());
+                JsonNode comment = node.get("备注");
+                rawField.setComment(comment == null ? "" : comment.asText());
+                JsonNode required = node.get("是否必填");
+                rawField.setRequired(required == null ? "" : required.asText());
+
+                rawFields.add(rawField);
+            } catch (IllegalArgumentException e) {
+                // 捕获转换失败异常 (例如：JsonNode中缺少字段或类型不匹配)
+                System.err.println("映射 JsonNode 到 RawField 失败: " + node.toString());
+                e.printStackTrace();
+            }
+        }
+        return rawFields;
+    }
+
+    /**
+     * 从 Java 类型字符串中提取出复杂类型名称（如 List<String> 中的 String）
+     *
+     * @param javaType 原始 Java 类型字符串
+     * @return 复杂类型名称，如果不是复杂类型则返回 null
+     */
+    private String extractComplexTypeName(String javaType) {
+        if (javaType == null || !javaType.contains("<") || !javaType.contains(">")) {
+            return null;
+        }
+
+        // 查找最后一个 '<' 的位置
+        int start = javaType.lastIndexOf('<');
+        // 查找第一个 '>' 的位置
+        int end = javaType.indexOf('>');
+
+        if (start != -1 && end != -1 && start < end) {
+            // 提取 <> 之间的内容
+            String innerType = javaType.substring(start + 1, end).trim();
+
+            // 如果内部类型仍然是复杂类型 (如 Map<K,V> 或 List<List<T>>)
+            // 我们可以只取第一个逗号之前或直接返回
+            if (innerType.contains(",")) {
+                // 如果是 Map<K, V>，通常我们只关心值类型 V，这里简化为只取最后一部分
+                return innerType.substring(innerType.lastIndexOf(',') + 1).trim();
             }
 
-            // 将所有独立结构列表赋值给每个方法，方便 GraphMapper 统一处理
-            List<RawApiData.RawStructure> globalStructures = new ArrayList<>(globalStructuresMap.values());
-            extractedData.forEach(data -> {
-                RawApiData dataNew = (RawApiData) data;
-                dataNew.setNestedStructures(globalStructures);
-            });
-
-        } catch (Exception e) {
-            System.err.println("解析 DOCX 文档失败：" + e.getMessage());
-            e.printStackTrace();
+            return innerType;
         }
-
-//        return extractedData;
         return null;
     }
 
-    // =========================================================================
-    // 核心解析辅助方法 (需补全)
-    // =========================================================================
-
-    /**
-     * 处理段落：识别新的 API 接口的开始，并创建 RawApiData 实例。
-     */
-    private RawApiData handleParagraph(XWPFParagraph paragraph,
-                                       List<RawApiData> extractedData,
-                                       Map<String, RawApiData.RawStructure> globalStructuresMap) {
-        String text = paragraph.getText().trim();
-
-//        [cite_start]// 识别方法入口：例如 "功能方法,com.comstar..." [cite: 6]
-        if (text.startsWith("功能方法,")) {
-            RawApiData newMethod = new RawApiData();
-            String fullPath = text.substring("功能方法,".length()).trim();
-            newMethod.setFullPath(fullPath);
-            newMethod.setMethodName(fullPath.substring(fullPath.lastIndexOf(".") + 1));
-            extractedData.add(newMethod);
-            return newMethod; // 切换状态：当前正在解析这个方法
-        }
-
-//        [cite_start]// 识别独立结构标题：例如 "表114 BpmTaskProcessVO详细字段" [cite: 15]
-        Matcher matcher = STRUCTURE_NAME_PATTERN.matcher(text);
-        if (matcher.find()) {
-            // 识别到独立结构，但表格在下一个元素，这里只做标记
-            // TODO: 如何将这个 structureName 传递给紧接着的表格解析逻辑，是状态机优化的难点
-        }
-
-        return null; // 保持当前状态不变
-    }
-
-    /**
-     * [cite_start]处理 API 表格：区分请求字段表和返回字段表 [cite: 10, 12]。
-     */
-    private void handleMethodTable(XWPFTable table, RawApiData currentMethodData) {
-        if (table.getRows().isEmpty()) return;
-
-        // 简化判断：使用表格内容来区分请求/返回表
-        String tableText = table.getText().trim();
-
-//        [cite_start]// 识别请求字段表 (如 表112)，特征：包含 "是否必填" [cite: 11]
-        if (tableText.contains("请求字段") && tableText.contains("是否必填")) {
-            currentMethodData.setInputParams(parseParameterTable(table));
-            System.out.println("  -> 解析到请求字段表。");
-        }
-
-//        [cite_start]// 识别返回字段表 (如 表113)，特征：包含 "返回字段" [cite: 13]
-//        else if (tableText.contains("返回字段") && tableText.contains("Java类型")) {
-//            RawField topReturnField = parseReturnFieldTable(table);
-//            if (topReturnField != null) {
-//                currentMethodData.setReturnField(topReturnField);
-//            }
-//            System.out.println("  -> 解析到返回字段表。");
-//        }
-
-        // TODO: 这里需要添加逻辑来清除 currentMethodData，避免将不相关的表格误解析给同一个方法
-    }
-
-    // **TODO: 补全表格行解析逻辑**
-
-    /**
-     * [cite_start]解析请求字段表格 (表112等) [cite: 11]
-     */
-    private List<RawApiData.RawField> parseParameterTable(XWPFTable table) {
-//        [cite_start]// ... 实现：从第二行开始，读取 字段,名称,Java类型,是否必填,备注 [cite: 11]
-        return new ArrayList<>();
-    }
-
-    /**
-     * [cite_start]解析返回字段表格 (表113等) [cite: 14]
-     */
-    private RawApiData.RawField parseReturnFieldTable(XWPFTable table) {
-//        [cite_start]// ... 实现：从第二行开始，读取 字段,名称,Java类型,数据库类型,备注 [cite: 14]
-        // **关键：从 JavaType 中提取 complexTypeName**
-        return null;
-    }
-
-    /**
-     * [cite_start]解析独立数据结构表格 (表114等) [cite: 15, 16]
-     */
-    private RawApiData.RawStructure parseGlobalStructureTable(XWPFTable table, String structureName) {
-//         [cite_start]// ... 实现：从第二行开始，读取 字段,名称,Java类型,数据库类型,备注 [cite: 16]
-        // **关键：递归识别 JavaType 中嵌套的 VO/DTO**
-        return null;
-    }
 }

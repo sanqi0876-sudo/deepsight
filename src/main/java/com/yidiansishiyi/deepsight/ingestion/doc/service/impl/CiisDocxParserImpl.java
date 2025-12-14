@@ -2,6 +2,7 @@ package com.yidiansishiyi.deepsight.ingestion.doc.service.impl;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -63,8 +64,7 @@ public class CiisDocxParserImpl implements DocxParser {
 
     @Override
     public boolean supports(String fileName) {
-        // 示例：判断文件名前缀是否符合 CIIS 命名规范
-        return fileName.contains("第四章") || fileName.contains("ciis");
+        return fileName.contains("ciis");
     }
 
     @Override
@@ -93,19 +93,7 @@ public class CiisDocxParserImpl implements DocxParser {
                         continue;
                     }
                     if (containsAnyKeyword(rawApiData.getHeadingPath(), DocxDto.INTER_FLAG)) {
-                        if (parsedContent.size() == 3) {
-                            JsonNode jsonNode0 = parsedContent.get(0);
-                            rawApiData.setCommonInterface(jsonNode0.get("内容").asText());
-
-                            JsonNode jsonNode1 = parsedContent.get(1);
-                            rawApiData.setMethodName(jsonNode1.get("内容").asText());
-
-                            JsonNode jsonNode2 = parsedContent.get(2);
-                            rawApiData.setMethodName(jsonNode2.get("内容").asText());
-
-                        }
-                        List<RawField> rawFields = mapINTERJsonToRawFields(parsedContent);
-                        rawApiData.setInputParams(rawFields);
+                        setInputParams(parsedContent, rawApiData);
                     }
                     if (containsAnyKeyword(rawApiData.getHeadingPath(), DocxDto.REQUEST_FLAG)) {
                         List<RawField> rawFields = mapJsonToRawFields(parsedContent);
@@ -117,14 +105,9 @@ public class CiisDocxParserImpl implements DocxParser {
                         rawStructure.setFields(rawFields);
                         rawApiData.setReturnField(rawFields);
                     }
-
-                    // 两种，一种调用接口信息的，另一种是入参出参的，可以接多个表单信息嵌套。
-                    System.out.println(parsedContent);
                 } catch (JsonProcessingException e) {
                     throw new RuntimeException(e);
                 }
-
-                System.out.println();
             } else {
                 rawApiData = new RawApiData();
                 rawApiData.setHeadingPath(rawDocxContentDto.getStyle() + "#" + rawDocxContentDto.getContent());
@@ -136,8 +119,47 @@ public class CiisDocxParserImpl implements DocxParser {
         return docxDtos;
     }
 
-    private List<RawField> mapINTERJsonToRawFields(List<JsonNode> parsedContent) {
-        return null;
+    private void setInputParams(List<JsonNode> parsedContent, RawApiData rawApiData) {
+        if (parsedContent.size() == 3) {
+            JsonNode jsonNode0 = parsedContent.get(0);
+            rawApiData.setCommonInterface(jsonNode0.get("内容").asText());
+
+            JsonNode jsonNode1 = parsedContent.get(1);
+            rawApiData.setMethodName(jsonNode1.get("内容").asText());
+
+            JsonNode jsonNode2 = parsedContent.get(2);
+            String text = jsonNode2.get("内容").asText();
+            List<RawField> rawFields = mapINTERJsonToRawFields(text);
+            rawApiData.setInputParams(rawFields);
+        }
+    }
+
+    private List<RawField> mapINTERJsonToRawFields(String parsedContent) {
+        if (parsedContent == null) {
+            return null;
+        }
+        String[] split = parsedContent.replace("(", "")
+                .replace(")", "")
+                .replace("（", "")
+                .replace("）", "")
+                .split(",");
+        List<RawField> res = new ArrayList<>();
+        for (String age : split) {
+            if (StrUtil.isBlank(age) || "空".equals(age)) {
+                continue;
+            }
+            String[] ageN = age.trim().split(" ");
+            RawField rawField = new RawField();
+            rawField.setJavaType(ageN[0]);
+            try {
+                rawField.setName(ageN[1]);
+            } catch (Exception e) {
+                System.out.println("==========================");
+                System.out.println(age);
+            }
+            res.add(rawField);
+        }
+        return res;
     }
 
     public static boolean containsAnyKeyword(String text, List<String> keywords) {

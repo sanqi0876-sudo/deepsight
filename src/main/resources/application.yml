@@ -6,15 +6,6 @@ spring:
     store-type: redis
     # 30 days expire
     timeout: 2592000
-  neo4j:
-    uri: bolt://115.190.226.216:7687
-    authentication:
-      username: neo4j
-      password: neo4j
-    connection:
-      timeout: 300s
-      max-connection-pool-size: 100
-      connection-acquisition-timeout: 30m
   # mysql
 #  datasource:
 #    driver-class-name: com.mysql.cj.jdbc.Driver
@@ -44,7 +35,6 @@ springdoc:
     - group: 'default'
       packages-to-scan: com.yidiansishiyi.deepsight.controller
 # knife4j
-# src/main/resources/application.yml
 knife4j:
   enable: true
   setting:

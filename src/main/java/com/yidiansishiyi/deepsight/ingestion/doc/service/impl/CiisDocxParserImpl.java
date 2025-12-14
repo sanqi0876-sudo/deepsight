@@ -49,7 +49,7 @@ public class CiisDocxParserImpl implements DocxParser {
     @PostConstruct
     void setUp() {
         // 用于测试时加载文件
-        String testFileName = "ciis/doc/4.第四章-交易对手信息.docx";
+        String testFileName = "ciis/doc/1.第一章-基础数据.docx";
         InputStream testFileStream = ResourceUtil.getStream(testFileName);
 //        List<RawDocxContentDto> rawDocxContentDtos = WordDirectoryExtractor.extractDirectoryStructure(testFileName);
         List<DocxDto> parse = parse(testFileStream);
@@ -95,13 +95,13 @@ public class CiisDocxParserImpl implements DocxParser {
                     if (containsAnyKeyword(rawApiData.getHeadingPath(), DocxDto.INTER_FLAG)) {
                         if (parsedContent.size() == 3) {
                             JsonNode jsonNode0 = parsedContent.get(0);
-                            rawApiData.setCommonInterface(jsonNode0.asText());
+                            rawApiData.setCommonInterface(jsonNode0.get("内容").asText());
 
                             JsonNode jsonNode1 = parsedContent.get(1);
-                            rawApiData.setMethodName(jsonNode1.asText());
+                            rawApiData.setMethodName(jsonNode1.get("内容").asText());
 
                             JsonNode jsonNode2 = parsedContent.get(2);
-                            rawApiData.setMethodName(jsonNode2.asText());
+                            rawApiData.setMethodName(jsonNode2.get("内容").asText());
 
                         }
                         List<RawField> rawFields = mapINTERJsonToRawFields(parsedContent);

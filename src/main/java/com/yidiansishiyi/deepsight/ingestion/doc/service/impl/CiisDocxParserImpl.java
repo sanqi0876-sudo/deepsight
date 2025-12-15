@@ -1,9 +1,7 @@
 package com.yidiansishiyi.deepsight.ingestion.doc.service.impl;
 
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -16,20 +14,17 @@ import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawApiData.RawField;
 import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawApiData.RawStructure;
 import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.RawDocxContentDto;
 import com.yidiansishiyi.deepsight.ingestion.doc.service.DocxParser;
-import com.yidiansishiyi.deepsight.utils.DocxOutlineExtractor;
-import com.yidiansishiyi.deepsight.utils.HeadingItem;
 import com.yidiansishiyi.deepsight.utils.WordDirectoryExtractor;
-import jakarta.annotation.PostConstruct;
-import org.apache.poi.xwpf.usermodel.*;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * [具体策略] 专门用于解析 CIIS 接口文档的实现类。
@@ -38,29 +33,8 @@ import java.util.regex.Pattern;
 @Service
 public class CiisDocxParserImpl implements DocxParser {
 
-    // 优化后的正则：匹配独立结构标题。例如 "表104 查询地区返回contents字段" 或 "表\d+ BpmTaskProcessVO详细字段"
-    private static final Pattern STRUCTURE_TABLE_TITLE_PATTERN =
-            Pattern.compile("表\\d+\\s+(查询)?(.+?)(返回contents字段|详细字段)");
-
-    // 独立结构（如 地区，行业，评级）的名称列表，用于辅助识别段落标题
-    private static final List<String> GLOBAL_STRUCTURE_NAMES = List.of("地区", "行业", "评级", "自定义字段设置");
-
     private static final ObjectMapper objectMapper = new ObjectMapper();
 
-    @PostConstruct
-    void setUp() {
-        // 用于测试时加载文件
-        String testFileName = "ciis/doc/1.第一章-基础数据.docx";
-        InputStream testFileStream = ResourceUtil.getStream(testFileName);
-//        List<RawDocxContentDto> rawDocxContentDtos = WordDirectoryExtractor.extractDirectoryStructure(testFileName);
-        List<DocxDto> parse = parse(testFileStream);
-        System.out.println();
-        System.out.println();
-        System.out.println();
-        System.out.println();
-        String jsonStr = JSONUtil.toJsonStr(parse);
-        System.out.println(jsonStr);
-    }
 
     @Override
     public boolean supports(String fileName) {
@@ -74,6 +48,7 @@ public class CiisDocxParserImpl implements DocxParser {
 
         List<DocxDto> docxDtos = new ArrayList<>();
         RawApiData rawApiData = new RawApiData();
+        String[] topicArray = new String[20];
         for (RawDocxContentDto rawDocxContentDto : rawDocxContentDtos) {
             String style = rawDocxContentDto.getStyle();
             if (DocxDto.DOCX_TYPE_TXT.equals(style)) {
@@ -110,6 +85,8 @@ public class CiisDocxParserImpl implements DocxParser {
                 }
             } else {
                 rawApiData = new RawApiData();
+                String topic = getTopic(topicArray, Integer.valueOf(rawDocxContentDto.getStyle()), rawDocxContentDto.getContent());
+                rawApiData.setFullPath(topic);
                 rawApiData.setHeadingPath(rawDocxContentDto.getStyle() + "#" + rawDocxContentDto.getContent());
                 docxDtos.add(rawApiData);
             }
@@ -117,6 +94,32 @@ public class CiisDocxParserImpl implements DocxParser {
 
 
         return docxDtos;
+    }
+
+    /**
+     * 更新数组中指定位置的 Topic，并返回当前有效 Topic 的完整路径。
+     *
+     * @param topicArray 存储 Topic 的数组。
+     * @param idx 当前有效的 Topic 数量 (size)，即下一个元素应该放置的索引。
+     * @param topic 要放置的新 Topic 字符串。
+     * @return 使用 " > " 分割符连接的当前 Topic 路径（从索引 0 到 idx-1）。
+     */
+    private String getTopic(String[] topicArray, int idx, String topic) {
+        if (idx <= 0 || idx > topicArray.length) {
+            if (idx <= 0) {
+                return "";
+            }
+            throw new IndexOutOfBoundsException("数组索引错误或 Topic Stack 溢出。Idx: " + idx + ", 数组长度: " + topicArray.length);
+        }
+
+        topicArray[idx - 1] = topic;
+
+        List<String> validTopics = Arrays.stream(topicArray, 0, idx - 1)
+                .filter(StrUtil::isNotBlank)
+                .filter(res -> !"null".equals(res))
+                .collect(Collectors.toList());
+
+        return StrUtil.join(" > ", validTopics);
     }
 
     private void setInputParams(List<JsonNode> parsedContent, RawApiData rawApiData) {
@@ -194,38 +197,6 @@ public class CiisDocxParserImpl implements DocxParser {
             }
         }
         return rawFields;
-    }
-
-    /**
-     * 从 Java 类型字符串中提取出复杂类型名称（如 List<String> 中的 String）
-     *
-     * @param javaType 原始 Java 类型字符串
-     * @return 复杂类型名称，如果不是复杂类型则返回 null
-     */
-    private String extractComplexTypeName(String javaType) {
-        if (javaType == null || !javaType.contains("<") || !javaType.contains(">")) {
-            return null;
-        }
-
-        // 查找最后一个 '<' 的位置
-        int start = javaType.lastIndexOf('<');
-        // 查找第一个 '>' 的位置
-        int end = javaType.indexOf('>');
-
-        if (start != -1 && end != -1 && start < end) {
-            // 提取 <> 之间的内容
-            String innerType = javaType.substring(start + 1, end).trim();
-
-            // 如果内部类型仍然是复杂类型 (如 Map<K,V> 或 List<List<T>>)
-            // 我们可以只取第一个逗号之前或直接返回
-            if (innerType.contains(",")) {
-                // 如果是 Map<K, V>，通常我们只关心值类型 V，这里简化为只取最后一部分
-                return innerType.substring(innerType.lastIndexOf(',') + 1).trim();
-            }
-
-            return innerType;
-        }
-        return null;
     }
 
 }

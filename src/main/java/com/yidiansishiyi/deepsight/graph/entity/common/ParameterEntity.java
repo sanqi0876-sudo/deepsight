@@ -24,10 +24,16 @@ public class ParameterEntity {
     
     @Property("javaType") // Java 类型
     private String javaType;
+
+    @Property("dbType") // Java 类型
+    private String dbType;
     
     @Property("required") // 是否必填 (是/否)
     private String required;
     
     @Property("comment") // 备注
-    private String comment; 
+    private String comment;
+
+    @Property("complexTypeName") // 特殊类型
+    private String complexTypeName;
 }

@@ -30,6 +30,9 @@ public class AttributeEntity {
 
     @Property("comment") // 备注信息，用于全文搜索
     private String comment;
+
+    @Property("required") // 是否必填 (仅入参使用)
+    private String required;
     
     // 字段所在的复杂结构名称（用于反查，辅助Mapper）
     @Property("ownerStructureName")

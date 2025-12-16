@@ -1,0 +1,27 @@
+// 1. 匹配所有 Method 节点
+MATCH (m:Method)
+// 2. 匹配与 Method 节点共享相同 fullPath 值的 Section 节点
+MATCH (s:Section {fullPath: m.fullPath})
+// 3. 建立关系：Method 节点属于该 Section
+// 如果关系已存在，不会重复创建
+MERGE (m)-[:BELONGS_TO_SECTION]->(s)
+RETURN count(m) AS MethodsLinked
+
+// 1. 匹配所有 Method 节点
+MATCH (m:Method)
+// 2. 匹配与 Method 节点共享相同 fullPath 值的 Section 节点
+MATCH (s:Section {fullPath: m.fullPath})
+// 3. 建立关系：Method 节点属于该 Section
+// 如果关系已存在，不会重复创建
+MERGE (m)-[:BELONGS_TO_SECTION]->(s)
+RETURN count(m) AS MethodsLinked
+
+
+// 1. 查找目标章节节点
+MATCH (s:Section {fullPath: ' 基础数据  >  基础数据 > 债券基本资料（FBS）'})
+// 2. 查找该章节下的所有 Method 节点
+MATCH (m:Method)-[:BELONGS_TO_SECTION]->(s)
+// 3. 返回这些节点及其所有关联信息
+OPTIONAL MATCH (m)-[:REQUIRES]->(p:Parameter)
+// ... (所有其他关联关系) ...
+RETURN s.fullPath, m.headingPath, m.methodName, COLLECT(p)

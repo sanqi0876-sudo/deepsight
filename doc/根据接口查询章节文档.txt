@@ -1,0 +1,30 @@
+// 1. 定义要查询的方法的唯一标识（即您业务中的 methodName）
+// 这个字符串是：com.comstar.cnp.service.interfaces.ISecuritySearchToFbsService.getSecurityInfo
+WITH 'com.comstar.cnp.service.interfaces.ISecuritySearchToFbsService.getSecurityInfo' AS targetMethodName
+
+// 2. 【第一步】查找目标方法节点 (m1)，并确保 methodName 严格匹配目标字符串
+MATCH (m1:Method)
+WHERE m1.methodName = targetMethodName
+
+// 3. 提取 m1 节点的 fullPath 值，作为后续查询的共享路径目标
+// 使用 DISTINCT 确保我们只得到一个目标 fullPath 值
+WITH DISTINCT m1.fullPath AS targetFullPathValue
+
+// 4. 【第二步】查找所有 fullPath 属性等于提取值的 Method 节点 (m2)
+// m2 集合中包含了 m1 节点自身以及所有共享该 fullPath 的兄弟节点
+MATCH (m2:Method)
+WHERE m2.fullPath = targetFullPathValue
+
+// 5. 查找 m2 节点直接关联的所有信息（入参、出参、使用结构）
+OPTIONAL MATCH (m2)-[:REQUIRES]->(p:Parameter)
+OPTIONAL MATCH (m2)-[:RETURNS]->(rs:DataStructure)
+OPTIONAL MATCH (m2)-[:USES]->(us:DataStructure)
+
+// 6. 返回结果：返回每个 Method 节点及其所有关联信息
+RETURN
+    m2.methodName AS MethodName,      // 节点自身的 methodName (您的唯一标识)
+    m2.fullPath AS SharedFullPath,    // 节点共享的 fullPath 值
+    m2 {.*} AS MethodDetails,         // Method 节点自身的所有属性
+    COLLECT(DISTINCT p) AS InputParameters, // 入参列表
+    rs AS ReturnStructure,            // 顶级返回结构 (假设 RETURNS 关系为 1:1)
+    COLLECT(DISTINCT us) AS UsedStructures  // 使用的复杂结构列表

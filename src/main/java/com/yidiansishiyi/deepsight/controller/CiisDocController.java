@@ -6,14 +6,10 @@ import com.yidiansishiyi.deepsight.common.ResultUtils;
 import com.yidiansishiyi.deepsight.common.SearchRequest;
 import com.yidiansishiyi.deepsight.exception.ErrorCode;
 import com.yidiansishiyi.deepsight.exception.ThrowUtils;
-import com.yidiansishiyi.deepsight.graph.entity.common.DataStructureEntity;
-import com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity;
-import com.yidiansishiyi.deepsight.graph.entity.common.ParameterEntity;
-import com.yidiansishiyi.deepsight.graph.repository.MethodFullDetailsProjection;
 import com.yidiansishiyi.deepsight.service.CiisDocxNeo4J;
+import com.yidiansishiyi.deepsight.utils.MarkdownDocumentBuilder;
 import jakarta.annotation.Resource;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Map;
@@ -26,11 +22,13 @@ public class CiisDocController {
     private CiisDocxNeo4J ciisDocxNeo4J;
 
     @PostMapping("/query")
-    public BaseResponse<List<MethodEntity>> userRegister(@RequestBody SearchRequest searchRequest) {
+    public BaseResponse<String> userRegister(@RequestBody SearchRequest searchRequest) {
         ThrowUtils.throwIf(searchRequest == null, ErrorCode.PARAMS_ERROR);
-        List<MethodEntity> methodEntities = ciisDocxNeo4J.getFullDocumentByMethod(searchRequest.getSearchText());
-        String jsonStr = JSONUtil.toJsonStr(methodEntities);
-        System.out.println(jsonStr);
-        return ResultUtils.success(methodEntities);
+//        List<MethodFullDetailsProjection> methodEntities =
+        List<Map<String, Object>> fullDocumentByMethod = ciisDocxNeo4J.getFullDocumentByMethod(searchRequest.getSearchText());
+
+        String mdDoc = new MarkdownDocumentBuilder().buildMarkdown(fullDocumentByMethod);
+
+        return ResultUtils.success(mdDoc);
     }
 }

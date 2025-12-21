@@ -1,29 +1,20 @@
 package com.yidiansishiyi.deepsight.service;
 
 import cn.hutool.core.io.resource.ResourceUtil;
-import cn.hutool.json.JSONUtil;
-import com.yidiansishiyi.deepsight.graph.entity.common.DataStructureEntity;
 import com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity;
-import com.yidiansishiyi.deepsight.graph.entity.common.ParameterEntity;
-import com.yidiansishiyi.deepsight.graph.repository.MethodEntityRepository;
-import com.yidiansishiyi.deepsight.graph.repository.MethodFullDetailsProjection;
-import com.yidiansishiyi.deepsight.graph.repository.MethodRepository;
+import com.yidiansishiyi.deepsight.graph.repository.*;
 import com.yidiansishiyi.deepsight.ingestion.doc.model.dto.DocxDto;
 import com.yidiansishiyi.deepsight.ingestion.doc.service.DocxParser;
 import com.yidiansishiyi.deepsight.ingestion.mapper.GraphMapper;
-import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Repository;
+import org.springframework.data.neo4j.core.Neo4jClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import reactor.core.publisher.Flux;
 
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -36,7 +27,9 @@ public class CiisDocxNeo4J {
 
     private final MethodRepository methodRepository;
 
-    private final MethodEntityRepository methodEntityRepository;
+//    private final MethodDocumentRepository methodDocumentRepository;
+//
+//    private final MethodDocumentRepository methodEntityRepository;
 
 //    @PostConstruct
     void setUp() {
@@ -53,7 +46,7 @@ public class CiisDocxNeo4J {
      * @return 成功入库的方法实体列表
      */
     @Transactional // 保证整个导入过程要么成功，要么全部回滚
-    public List<MethodEntity> ingestDocxData(InputStream inputStream) {
+    public List<com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity> ingestDocxData(InputStream inputStream) {
 
         System.out.println("--- 1. 启动DOCX文档解析 ---");
 
@@ -61,7 +54,7 @@ public class CiisDocxNeo4J {
         // 假设 DocxParserImpl.parse() 直接返回 MethodEntity 列表，
         // 如果返回的是 DTO，您需要在这里用 Mapper 转换。
         List<DocxDto> methodsToIngest = ciisDocxParser.parse(inputStream);
-        List<MethodEntity> methodEntities = graphMapper.mapToMethodEntities(methodsToIngest);
+        List<com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity> methodEntities = graphMapper.mapToMethodEntities(methodsToIngest);
         if (methodsToIngest.isEmpty()) {
             System.out.println("文档解析器未提取到任何可入库的方法实体。");
             return List.of();
@@ -70,16 +63,47 @@ public class CiisDocxNeo4J {
         System.out.printf("--- 2. 解析完成，发现 %d 个接口方法 --- \n", methodsToIngest.size());
         // 3. 调用 Repository 持久化
         // Spring Data Neo4j 会自动处理 MethodEntity 及其关联的 ParameterEntity 和 FieldEntity
-        List<MethodEntity> savedMethods = methodRepository.saveAll(methodEntities);
+        List<com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity> savedMethods = methodRepository.saveAll(methodEntities);
 
         System.out.printf("--- 3. 数据入库成功，共存储 %d 个方法及其关联数据 --- \n", savedMethods.size());
 
         return savedMethods;
     }
 
-    public List<MethodEntity> getFullDocumentByMethod(String fullMethodName) {
-        return methodEntityRepository.findRelatedMethodsByMethodNameAndSharedFullPath(fullMethodName);
+    @Autowired
+    private Neo4jClient neo4jClient; // 注入这个底层客户端
+
+    public List<Map<String, Object>> getFullDocumentByMethod(String targetMethodName) {
+        String cypher = """
+            MATCH (m1:Method)
+            WHERE m1.methodName =~ ('(?i).*' + $name + '.*')
+            WITH DISTINCT m1.fullPath AS targetPath
+            MATCH (m2:Method)
+            WHERE m2.fullPath = targetPath
+            OPTIONAL MATCH (m2)-[:REQUIRES]->(p:Parameter)
+            OPTIONAL MATCH (m2)-[:RETURNS]->(rs:Parameter)
+            RETURN 
+                id(m2) AS id,
+                m2.methodName AS methodName,
+                m2.fullPath AS fullPath,
+                m2.headingPath AS headingPath,
+                m2.description AS description,
+                collect(DISTINCT p {.*}) AS parameters,
+                rs {.*} AS returnStructure
+        """;
+
+        // 直接获取原始 Map 列表，没有任何中间商赚差价，绝对不会再有 null
+        return (List<Map<String, Object>>) neo4jClient.query(cypher)
+                .bind(targetMethodName).to("name")
+                .fetch()
+                .all();
     }
+
+
+
+//    public List<MethodFullDetailsProjection> getFullDocumentByMethod(String fullMethodName) {
+//        return methodDocumentRepository.findFullDetailsByMethodName(fullMethodName);
+//    }
 
 
 //    /**
@@ -97,7 +121,7 @@ public class CiisDocxNeo4J {
     /**
      * 将投影接口转换为 MethodEntity
      */
-    private MethodEntity convertToMethodEntity(MethodFullDetailsProjection projection) {
+    private com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity convertToMethodEntity(Method projection) {
 //        MethodEntity methodEntity = new MethodEntity();
 
 //        // 从 methodDetails Map 中设置基本属性
@@ -130,7 +154,7 @@ public class CiisDocxNeo4J {
 //            methodEntity.setUsedStructures(new ArrayList<>(usedStructures));
 //        }
 
-        return (MethodEntity)projection;
+        return (com.yidiansishiyi.deepsight.graph.entity.common.MethodEntity)projection;
     }
 
 
